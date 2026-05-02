@@ -8,10 +8,10 @@ mod tui;
 mod utils;
 
 use clap::{ArgAction, Parser, Subcommand};
-use std::ffi::OsString;
 use config::Config;
 use error::Result;
 use output::OutputFormat;
+use std::ffi::OsString;
 
 /// CLI context shared across commands
 #[derive(Debug, Clone)]
@@ -481,6 +481,18 @@ enum Commands {
         /// Message to send to the agent
         #[arg(short, long)]
         message: Option<String>,
+        /// LLM provider name for this chat request
+        #[arg(long)]
+        provider: Option<String>,
+        /// LLM model for this chat request
+        #[arg(long)]
+        model: Option<String>,
+        /// LLM API base URL for this chat request
+        #[arg(long)]
+        api_base: Option<String>,
+        /// LLM API key for this chat request
+        #[arg(long)]
+        model_api_key: Option<String>,
         /// Session ID (defaults to machine unique ID)
         #[arg(short, long)]
         session: Option<String>,
@@ -550,9 +562,7 @@ impl Commands {
     /// Returns true if this is an admin command that supports --sudo
     fn is_admin_command(&self) -> bool {
         match self {
-            Self::Admin { .. }
-            | Self::System { .. }
-            | Self::Reindex { .. } => true,
+            Self::Admin { .. } | Self::System { .. } | Self::Reindex { .. } => true,
             _ => false,
         }
     }
@@ -842,7 +852,11 @@ fn preprocess_privacy_upsert_key_flags(args: Vec<OsString>) -> Vec<OsString> {
     if args[cmd_idx].to_string_lossy() != "privacy" {
         return args;
     }
-    if args.get(cmd_idx + 1).map(|s| s.to_string_lossy().to_string()) != Some("upsert".to_string()) {
+    if args
+        .get(cmd_idx + 1)
+        .map(|s| s.to_string_lossy().to_string())
+        != Some("upsert".to_string())
+    {
         return args;
     }
 
@@ -921,7 +935,9 @@ async fn main() {
 
     // Check if --sudo is used but root_api_key is not configured
     if ctx.sudo && ctx.config.root_api_key.is_none() {
-        eprintln!("Error: --sudo requires root_api_key to be configured in ~/.openviking/ovcli.conf");
+        eprintln!(
+            "Error: --sudo requires root_api_key to be configured in ~/.openviking/ovcli.conf"
+        );
         std::process::exit(2);
     }
 
@@ -976,7 +992,9 @@ async fn main() {
             to_uris,
             reason,
         } => handlers::handle_link(from_uri, to_uris, reason, ctx).await,
-        Commands::Unlink { from_uri, to_uri } => handlers::handle_unlink(from_uri, to_uri, ctx).await,
+        Commands::Unlink { from_uri, to_uri } => {
+            handlers::handle_unlink(from_uri, to_uri, ctx).await
+        }
         Commands::Export { uri, to } => handlers::handle_export(uri, to, ctx).await,
         Commands::Import {
             file_path,
@@ -1021,6 +1039,10 @@ async fn main() {
         Commands::Tui { uri } => handlers::handle_tui(uri, ctx).await,
         Commands::Chat {
             message,
+            provider,
+            model,
+            api_base,
+            model_api_key,
             session,
             sender,
             stream,
@@ -1041,6 +1063,10 @@ async fn main() {
             let cmd = commands::chat::ChatCommand {
                 endpoint,
                 api_key,
+                provider,
+                model,
+                api_base,
+                model_api_key,
                 account: ctx.config.account.clone(),
                 user: ctx.config.user.clone(),
                 session: session_id,
@@ -1089,7 +1115,8 @@ async fn main() {
             } else {
                 "replace".to_string()
             };
-            handlers::handle_write(uri, content, from_file, effective_mode, wait, timeout, ctx).await
+            handlers::handle_write(uri, content, from_file, effective_mode, wait, timeout, ctx)
+                .await
         }
         Commands::Reindex {
             uri,
@@ -1241,15 +1268,7 @@ mod tests {
         assert_eq!(client.api_key(), Some("user-key"));
 
         // With sudo: use root_api_key
-        let ctx = CliContext::from_config(
-            config,
-            OutputFormat::Json,
-            true,
-            None,
-            None,
-            None,
-            true,
-        );
+        let ctx = CliContext::from_config(config, OutputFormat::Json, true, None, None, None, true);
         let client = ctx.get_client();
         assert_eq!(client.api_key(), Some("root-key"));
     }

@@ -34,6 +34,22 @@ pub struct ChatCommand {
     #[arg(short, long, env = "VIKINGBOT_API_KEY")]
     pub api_key: Option<String>,
 
+    /// LLM provider name for this chat request
+    #[arg(long)]
+    pub provider: Option<String>,
+
+    /// LLM model for this chat request
+    #[arg(long)]
+    pub model: Option<String>,
+
+    /// LLM API base URL for this chat request
+    #[arg(long)]
+    pub api_base: Option<String>,
+
+    /// LLM API key for this chat request
+    #[arg(long)]
+    pub model_api_key: Option<String>,
+
     /// Account identifier to send as X-OpenViking-Account
     #[arg(long)]
     pub account: Option<String>,
@@ -74,6 +90,18 @@ struct ChatMessage {
     content: String,
 }
 
+/// Request-scoped LLM overrides
+#[derive(Debug, Serialize)]
+struct RuntimeLlmOverrides {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    provider: Option<String>,
+    model: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    api_base: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    api_key: Option<String>,
+}
+
 /// Chat request body
 #[derive(Debug, Serialize)]
 struct ChatRequest {
@@ -85,6 +113,8 @@ struct ChatRequest {
     stream: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     context: Option<Vec<ChatMessage>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    runtime_llm: Option<RuntimeLlmOverrides>,
 }
 
 /// Chat response (non-streaming)
@@ -154,6 +184,65 @@ impl ChatCommand {
         req_builder
     }
 
+    fn build_runtime_llm(&self) -> Option<RuntimeLlmOverrides> {
+        let model = self
+            .model
+            .as_ref()
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())?
+            .to_string();
+
+        Some(RuntimeLlmOverrides {
+            provider: self
+                .provider
+                .as_ref()
+                .map(|value| value.trim())
+                .filter(|value| !value.is_empty())
+                .map(|value| value.to_string()),
+            model,
+            api_base: self
+                .api_base
+                .as_ref()
+                .map(|value| value.trim())
+                .filter(|value| !value.is_empty())
+                .map(|value| value.to_string()),
+            api_key: self
+                .model_api_key
+                .as_ref()
+                .map(|value| value.trim())
+                .filter(|value| !value.is_empty())
+                .map(|value| value.to_string()),
+        })
+    }
+
+    fn build_request(
+        &self,
+        message: String,
+        session_id: Option<String>,
+        stream: bool,
+    ) -> ChatRequest {
+        let request = ChatRequest {
+            message,
+            session_id,
+            user_id: Some(self.sender.clone()),
+            stream,
+            context: None,
+            runtime_llm: self.build_runtime_llm(),
+        };
+
+        if let Some(runtime_llm) = &request.runtime_llm {
+            eprintln!(
+                "[ov chat] request-scoped LLM override enabled: provider={}, model={}, api_base={}, api_key={}",
+                runtime_llm.provider.as_deref().unwrap_or("(auto)"),
+                runtime_llm.model,
+                runtime_llm.api_base.as_deref().unwrap_or("(default)"),
+                if runtime_llm.api_key.is_some() { "set" } else { "unset" },
+            );
+        }
+
+        request
+    }
+
     /// Send a single message and get response
     async fn send_message(&self, client: &Client, message: &str, auth: &ChatAuth) -> Result<()> {
         if self.stream {
@@ -172,13 +261,7 @@ impl ChatCommand {
     ) -> Result<()> {
         let url = format!("{}/chat", self.endpoint);
 
-        let request = ChatRequest {
-            message: message.to_string(),
-            session_id: self.session.clone(),
-            user_id: Some(self.sender.clone()),
-            stream: false,
-            context: None,
-        };
+        let request = self.build_request(message.to_string(), self.session.clone(), false);
 
         let req_builder = self.apply_auth_headers(client.post(&url).json(&request), auth);
 
@@ -216,13 +299,7 @@ impl ChatCommand {
     ) -> Result<()> {
         let url = format!("{}/chat/stream", self.endpoint);
 
-        let request = ChatRequest {
-            message: message.to_string(),
-            session_id: self.session.clone(),
-            user_id: Some(self.sender.clone()),
-            stream: true,
-            context: None,
-        };
+        let request = self.build_request(message.to_string(), self.session.clone(), true);
 
         let req_builder = self.apply_auth_headers(client.post(&url).json(&request), auth);
 
@@ -401,13 +478,7 @@ impl ChatCommand {
     ) -> Result<()> {
         let url = format!("{}/chat", self.endpoint);
 
-        let request = ChatRequest {
-            message: input.to_string(),
-            session_id: session_id.clone(),
-            user_id: Some(self.sender.clone()),
-            stream: false,
-            context: None,
-        };
+        let request = self.build_request(input.to_string(), session_id.clone(), false);
 
         let req_builder = self.apply_auth_headers(client.post(&url).json(&request), auth);
 
@@ -453,13 +524,7 @@ impl ChatCommand {
     ) -> Result<()> {
         let url = format!("{}/chat/stream", self.endpoint);
 
-        let request = ChatRequest {
-            message: input.to_string(),
-            session_id: session_id.clone(),
-            user_id: Some(self.sender.clone()),
-            stream: true,
-            context: None,
-        };
+        let request = self.build_request(input.to_string(), session_id.clone(), true);
 
         let req_builder = self.apply_auth_headers(client.post(&url).json(&request), auth);
 
@@ -680,6 +745,10 @@ impl ChatCommand {
         Self {
             endpoint,
             api_key,
+            provider: None,
+            model: None,
+            api_base: None,
+            model_api_key: None,
             account: None,
             user: None,
             session,
@@ -696,4 +765,82 @@ impl ChatCommand {
 fn render_markdown(text: &str) {
     let skin = MadSkin::default();
     skin.print_text(text);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ChatCommand;
+
+    fn base_command() -> ChatCommand {
+        ChatCommand {
+            endpoint: "http://localhost:1933/bot/v1".to_string(),
+            api_key: Some("server-key".to_string()),
+            provider: None,
+            model: None,
+            api_base: None,
+            model_api_key: None,
+            account: None,
+            user: None,
+            session: Some("session-1".to_string()),
+            sender: "user".to_string(),
+            message: None,
+            stream: true,
+            no_format: false,
+            no_history: false,
+        }
+    }
+
+    #[test]
+    fn build_runtime_llm_uses_explicit_override_fields() {
+        let mut cmd = base_command();
+        cmd.provider = Some("openai".to_string());
+        cmd.model = Some("gpt-4.1".to_string());
+        cmd.api_base = Some("https://example.test/v1".to_string());
+        cmd.model_api_key = Some("model-secret".to_string());
+
+        let runtime_llm = cmd
+            .build_runtime_llm()
+            .expect("runtime_llm should be built when model is present");
+
+        assert_eq!(runtime_llm.provider.as_deref(), Some("openai"));
+        assert_eq!(runtime_llm.model, "gpt-4.1");
+        assert_eq!(runtime_llm.api_base.as_deref(), Some("https://example.test/v1"));
+        assert_eq!(runtime_llm.api_key.as_deref(), Some("model-secret"));
+    }
+
+    #[test]
+    fn build_request_omits_runtime_llm_without_model() {
+        let cmd = base_command();
+        let request = cmd.build_request("hello".to_string(), cmd.session.clone(), false);
+        let value = serde_json::to_value(&request).expect("request should serialize");
+
+        assert!(value.get("runtime_llm").is_none());
+        assert_eq!(value.get("message").and_then(|v| v.as_str()), Some("hello"));
+    }
+
+    #[test]
+    fn build_request_includes_runtime_llm_when_model_is_present() {
+        let mut cmd = base_command();
+        cmd.provider = Some("openai".to_string());
+        cmd.model = Some("gpt-4.1".to_string());
+        cmd.api_base = Some("https://example.test/v1".to_string());
+        cmd.model_api_key = Some("model-secret".to_string());
+
+        let request = cmd.build_request("hello".to_string(), cmd.session.clone(), true);
+        let value = serde_json::to_value(&request).expect("request should serialize");
+        let runtime_llm = value
+            .get("runtime_llm")
+            .expect("runtime_llm should be present");
+
+        assert_eq!(runtime_llm.get("provider").and_then(|v| v.as_str()), Some("openai"));
+        assert_eq!(runtime_llm.get("model").and_then(|v| v.as_str()), Some("gpt-4.1"));
+        assert_eq!(
+            runtime_llm.get("api_base").and_then(|v| v.as_str()),
+            Some("https://example.test/v1")
+        );
+        assert_eq!(
+            runtime_llm.get("api_key").and_then(|v| v.as_str()),
+            Some("model-secret")
+        );
+    }
 }

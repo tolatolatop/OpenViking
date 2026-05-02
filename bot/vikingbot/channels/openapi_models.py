@@ -44,6 +44,15 @@ class ChatMessage(BaseModel):
     )
 
 
+class RuntimeLLMConfig(BaseModel):
+    """Request-scoped LLM override config."""
+
+    provider: Optional[str] = Field(default=None, description="LLM provider name override")
+    model: str = Field(..., description="LLM model override", min_length=1)
+    api_base: Optional[str] = Field(default=None, description="LLM API base URL override")
+    api_key: Optional[str] = Field(default=None, description="LLM API key override")
+
+
 class ChatRequest(BaseModel):
     """Request body for chat endpoint."""
 
@@ -55,6 +64,10 @@ class ChatRequest(BaseModel):
     stream: bool = Field(default=False, description="Whether to stream the response")
     context: Optional[List[ChatMessage]] = Field(
         default=None, description="Additional context messages"
+    )
+    runtime_llm: Optional[RuntimeLLMConfig] = Field(
+        default=None,
+        description="Request-scoped provider/model override for this chat turn",
     )
     need_reply: bool = True
     channel_id: Optional[str] = Field(

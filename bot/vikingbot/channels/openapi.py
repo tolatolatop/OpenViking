@@ -149,6 +149,10 @@ class OpenAPIChannel(BaseChannel):
             logger.warning("No global config provided, cannot load BotChannels")
             return
 
+        if not hasattr(self._global_config, "channels_config"):
+            logger.debug("Global config has no channels_config, skipping BotChannel loading")
+            return
+
         # Get all channel configs
         channels_config = self._global_config.channels_config
         all_channel_configs = channels_config.get_all_channels()
@@ -258,6 +262,24 @@ class OpenAPIChannel(BaseChannel):
                 else self.workspace_path
             )
         return Path("~/.openviking/data/bot").expanduser()
+
+    @staticmethod
+    def _build_request_metadata(request: ChatRequest) -> dict[str, Any]:
+        """Build transient per-request metadata for the agent loop."""
+        metadata: dict[str, Any] = {}
+        if request.runtime_llm is not None:
+            runtime_llm = request.runtime_llm.model_dump(exclude_none=True)
+            model = runtime_llm.get("model")
+            if isinstance(model, str) and model.strip():
+                logger.info(
+                    "Attaching runtime_llm override to inbound chat request "
+                    f"model={model} "
+                    f"provider={runtime_llm.get('provider') or '(auto)'} "
+                    f"api_base={runtime_llm.get('api_base') or '(default)'} "
+                    f"api_key={'set' if runtime_llm.get('api_key') else 'unset'}"
+                )
+                metadata["runtime_llm"] = runtime_llm
+        return metadata
 
     def _create_router(self) -> APIRouter:
         """Create the FastAPI router with all routes."""
@@ -479,6 +501,7 @@ class OpenAPIChannel(BaseChannel):
                 session_key=session_key,
                 sender_id=user_id,
                 content=content,
+                metadata=self._build_request_metadata(request),
             )
 
             await self.bus.publish_inbound(msg)
@@ -543,6 +566,7 @@ class OpenAPIChannel(BaseChannel):
                     session_key=session_key,
                     sender_id=user_id,
                     content=request.message,
+                    metadata=self._build_request_metadata(request),
                 )
 
                 await self.bus.publish_inbound(msg)
@@ -622,6 +646,7 @@ class OpenAPIChannel(BaseChannel):
                 sender_id=user_id,
                 content=content,
                 need_reply=request.need_reply,
+                metadata=self._build_request_metadata(request),
             )
 
             await self.bus.publish_inbound(msg)
@@ -693,6 +718,7 @@ class OpenAPIChannel(BaseChannel):
                     session_key=session_key,
                     sender_id=user_id,
                     content=request.message,
+                    metadata=self._build_request_metadata(request),
                 )
 
                 await self.bus.publish_inbound(msg)

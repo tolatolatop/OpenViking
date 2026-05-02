@@ -28,6 +28,8 @@ from vikingbot.hooks.manager import hook_manager
 from vikingbot.integrations.langfuse import LangfuseClient
 from vikingbot.observability.outcome import evaluate_response_outcome, should_update_outcome
 from vikingbot.providers.base import LLMProvider
+from vikingbot.providers.litellm_provider import LiteLLMProvider
+from vikingbot.providers.registry import find_by_model, find_gateway
 from vikingbot.sandbox import SandboxManager
 from vikingbot.session.manager import Session, SessionManager
 from vikingbot.utils.helpers import cal_str_tokens
@@ -259,10 +261,60 @@ class AgentLoop:
         self._running = False
         logger.info("Agent loop stopping")
 
+    def _resolve_request_llm(
+        self, msg: InboundMessage
+    ) -> tuple[LLMProvider, str, str | None]:
+        """Resolve request-scoped provider/model overrides for chat requests."""
+        runtime_llm = (msg.metadata or {}).get("runtime_llm")
+        if not isinstance(runtime_llm, dict):
+            provider_name = self.config.get_provider_name(self.model) if self.config else None
+            return self.provider, self.model, provider_name
+
+        raw_model = runtime_llm.get("model")
+        if not isinstance(raw_model, str) or not raw_model.strip():
+            provider_name = self.config.get_provider_name(self.model) if self.config else None
+            return self.provider, self.model, provider_name
+
+        model = raw_model.strip()
+        api_base = runtime_llm.get("api_base")
+        api_base = api_base.strip() if isinstance(api_base, str) and api_base.strip() else None
+        api_key = runtime_llm.get("api_key")
+        api_key = api_key.strip() if isinstance(api_key, str) and api_key.strip() else None
+
+        raw_provider_name = runtime_llm.get("provider")
+        provider_name = raw_provider_name.strip() if isinstance(raw_provider_name, str) else ""
+        provider_name = provider_name or None
+        if provider_name is None:
+            gateway = find_gateway(provider_name=None, api_key=api_key, api_base=api_base)
+            if gateway is not None:
+                provider_name = gateway.name
+            else:
+                matched = find_by_model(model)
+                provider_name = matched.name if matched is not None else None
+
+        logger.info(
+            "Using request-scoped chat model override model={} provider={} api_base={}",
+            model,
+            provider_name or "(auto)",
+            api_base or "(default)",
+        )
+        provider = LiteLLMProvider(
+            api_key=None,
+            api_base=None,
+            default_model=model,
+            provider_name=provider_name,
+            langfuse_client=LangfuseClient.get_instance(),
+        )
+        provider.api_key = api_key
+        provider.api_base = api_base
+        return (provider, model, provider_name)
+
     async def _run_agent_loop(
         self,
         messages: list[dict],
         session_key: SessionKey,
+        provider: LLMProvider,
+        model: str,
         publish_events: bool = True,
         sender_id: str | None = None,
         ov_tools_enable: bool = True,
@@ -301,10 +353,10 @@ class AgentLoop:
                     )
                 )
 
-            response = await self.provider.chat(
+            response = await provider.chat(
                 messages=messages,
                 tools=self.tools.get_definitions(ov_tools_enable=ov_tools_enable),
-                model=self.model,
+                model=model,
                 session_id=session_key.safe_name(),
             )
             if response.usage:
@@ -605,7 +657,7 @@ class AgentLoop:
             )
 
             # Build initial messages (use get_history for LLM-formatted messages)
-            provider_name = self.config.get_provider_name(self.model) if self.config else None
+            request_provider, request_model, provider_name = self._resolve_request_llm(msg)
             messages = await message_context.build_messages(
                 history=session.get_history(provider_name=provider_name),
                 current_message=msg.content,
@@ -630,6 +682,8 @@ class AgentLoop:
                 ) = await self._run_agent_loop(
                     messages=messages,
                     session_key=session_key,
+                    provider=request_provider,
+                    model=request_model,
                     publish_events=True,
                     sender_id=msg.sender_id,
                     ov_tools_enable=ov_tools_enable,
@@ -811,6 +865,8 @@ class AgentLoop:
         ) = await self._run_agent_loop(
             messages=messages,
             session_key=msg.session_key,
+            provider=self.provider,
+            model=self.model,
             publish_events=False,
             ov_tools_enable=ov_tools_enable,
         )
