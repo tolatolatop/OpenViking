@@ -602,6 +602,18 @@ enum Commands {
         /// Message to send to the agent
         #[arg(short, long)]
         message: Option<String>,
+        /// LLM provider name for this chat request
+        #[arg(long)]
+        provider: Option<String>,
+        /// LLM model for this chat request
+        #[arg(long)]
+        model: Option<String>,
+        /// LLM API base URL for this chat request
+        #[arg(long)]
+        api_base: Option<String>,
+        /// LLM API key for this chat request
+        #[arg(long)]
+        model_api_key: Option<String>,
         /// Session ID (defaults to machine unique ID)
         #[arg(short, long)]
         session: Option<String>,
@@ -1365,6 +1377,10 @@ async fn main() {
         Commands::Tui { uri } => handlers::handle_tui(uri, ctx).await,
         Commands::Chat {
             message,
+            provider,
+            model,
+            api_base,
+            model_api_key,
             session,
             sender,
             stream,
@@ -1385,6 +1401,10 @@ async fn main() {
             let cmd = commands::chat::ChatCommand {
                 endpoint,
                 api_key,
+                provider,
+                model,
+                api_base,
+                model_api_key,
                 account: ctx.config.account.clone(),
                 user: ctx.config.user.clone(),
                 session: session_id,

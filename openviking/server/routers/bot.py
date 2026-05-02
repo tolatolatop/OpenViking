@@ -108,6 +108,16 @@ async def chat(
             detail="Invalid JSON in request body",
         )
 
+    runtime_llm = body.get("runtime_llm")
+    if isinstance(runtime_llm, dict) and runtime_llm.get("model"):
+        logger.info(
+            "Forwarding bot chat request with runtime_llm "
+            f"model={runtime_llm.get('model')} "
+            f"provider={runtime_llm.get('provider') or '(auto)'} "
+            f"api_base={runtime_llm.get('api_base') or '(default)'} "
+            f"api_key={'set' if runtime_llm.get('api_key') else 'unset'}"
+        )
+
     try:
         async with _create_bot_proxy_client() as client:
             # Build headers for bot gateway
@@ -158,6 +168,16 @@ async def feedback(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid JSON in request body",
+        )
+
+    runtime_llm = body.get("runtime_llm")
+    if isinstance(runtime_llm, dict) and runtime_llm.get("model"):
+        logger.info(
+            "Forwarding bot chat stream request with runtime_llm "
+            f"model={runtime_llm.get('model')} "
+            f"provider={runtime_llm.get('provider') or '(auto)'} "
+            f"api_base={runtime_llm.get('api_base') or '(default)'} "
+            f"api_key={'set' if runtime_llm.get('api_key') else 'unset'}"
         )
 
     try:

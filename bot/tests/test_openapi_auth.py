@@ -14,7 +14,7 @@ from fastapi.testclient import TestClient
 from vikingbot.bus.events import OutboundEventType, OutboundMessage
 from vikingbot.bus.queue import MessageBus
 from vikingbot.channels.openapi import OpenAPIChannel, OpenAPIChannelConfig, PendingResponse
-from vikingbot.channels.openapi_models import ChatResponse
+from vikingbot.channels.openapi_models import ChatRequest, ChatResponse
 from vikingbot.config.schema import BotChannelConfig, SessionKey
 
 
@@ -175,6 +175,45 @@ class TestOpenAPIAuth:
         )
         assert authorized.status_code == 200
         assert authorized.json()["message"] == "ok:alpha"
+
+    @pytest.mark.asyncio
+    async def test_handle_chat_attaches_runtime_llm_metadata_to_inbound_message(
+        self, message_bus, temp_workspace
+    ):
+        channel = OpenAPIChannel(
+            OpenAPIChannelConfig(),
+            message_bus,
+            workspace_path=temp_workspace,
+        )
+        captured = {}
+
+        async def fake_publish_inbound(msg):
+            captured["msg"] = msg
+            pending = channel._pending[msg.session_key.chat_id]
+            pending.set_final("ok")
+
+        channel.bus.publish_inbound = fake_publish_inbound
+
+        response = await channel._handle_chat(
+            ChatRequest(
+                message="hello",
+                session_id="session-rt",
+                runtime_llm={
+                    "provider": "openai",
+                    "model": "gpt-4.1",
+                    "api_base": "https://example.test/v1",
+                    "api_key": "model-secret",
+                },
+            )
+        )
+
+        assert response.message == "ok"
+        assert captured["msg"].metadata["runtime_llm"] == {
+            "provider": "openai",
+            "model": "gpt-4.1",
+            "api_base": "https://example.test/v1",
+            "api_key": "model-secret",
+        }
 
     @pytest.mark.asyncio
     async def test_send_tracks_response_id_in_final_openapi_response(

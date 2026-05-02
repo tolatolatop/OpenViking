@@ -9,6 +9,7 @@ from vikingbot.bus.queue import MessageBus
 from vikingbot.config.schema import Config, SessionKey
 from vikingbot.heartbeat.service import HEARTBEAT_METADATA_KEY
 from vikingbot.providers.base import LLMProvider
+from vikingbot.providers.litellm_provider import LiteLLMProvider
 
 
 class _FakeProvider(LLMProvider):
@@ -33,22 +34,27 @@ class _FakeLangfuseClient:
         return metadata
 
 
-@pytest.mark.asyncio
-async def test_agent_loop_evaluates_previous_response_outcome_before_new_user_turn(
-    temp_dir: Path, monkeypatch
-):
+def _make_loop(temp_dir: Path, monkeypatch) -> AgentLoop:
     monkeypatch.setattr(AgentLoop, "_register_builtin_hooks", lambda self: None)
     monkeypatch.setattr(AgentLoop, "_register_default_tools", lambda self: None)
     monkeypatch.setattr("vikingbot.agent.loop.SubagentManager", _FakeSubagentManager)
 
     bus = MessageBus()
     config = Config(storage_workspace=str(temp_dir))
-    loop = AgentLoop(
+    return AgentLoop(
         bus=bus,
         provider=_FakeProvider(),
         workspace=temp_dir / "workspace",
         config=config,
     )
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_evaluates_previous_response_outcome_before_new_user_turn(
+    temp_dir: Path, monkeypatch
+):
+    loop = _make_loop(temp_dir, monkeypatch)
+    bus = loop.bus
 
     session_key = SessionKey(type="cli", channel_id="default", chat_id="session-1")
     session = loop.sessions.get_or_create(session_key, skip_heartbeat=True)
@@ -89,18 +95,8 @@ async def test_agent_loop_evaluates_previous_response_outcome_before_new_user_tu
 async def test_agent_loop_ignores_heartbeat_when_evaluating_previous_response_outcome(
     temp_dir: Path, monkeypatch
 ):
-    monkeypatch.setattr(AgentLoop, "_register_builtin_hooks", lambda self: None)
-    monkeypatch.setattr(AgentLoop, "_register_default_tools", lambda self: None)
-    monkeypatch.setattr("vikingbot.agent.loop.SubagentManager", _FakeSubagentManager)
-
-    bus = MessageBus()
-    config = Config(storage_workspace=str(temp_dir))
-    loop = AgentLoop(
-        bus=bus,
-        provider=_FakeProvider(),
-        workspace=temp_dir / "workspace",
-        config=config,
-    )
+    loop = _make_loop(temp_dir, monkeypatch)
+    bus = loop.bus
 
     session_key = SessionKey(type="cli", channel_id="default", chat_id="session-1")
     session = loop.sessions.get_or_create(session_key, skip_heartbeat=False)
@@ -202,3 +198,29 @@ async def test_agent_loop_emits_normalized_response_completed_payload(temp_dir: 
     session_path = temp_dir / "bot" / "sessions" / "cli__default__session-1.jsonl"
     metadata = json.loads(session_path.read_text().splitlines()[0])
     assert metadata["metadata"]["response_facts"][response.response_id] == payload
+
+
+def test_agent_loop_resolves_request_scoped_runtime_llm_override(temp_dir: Path, monkeypatch):
+    loop = _make_loop(temp_dir, monkeypatch)
+
+    msg = InboundMessage(
+        session_key=SessionKey(type="cli", channel_id="default", chat_id="session-1"),
+        sender_id="user-1",
+        content="hello",
+        metadata={
+            "runtime_llm": {
+                "provider": "openai",
+                "model": "gpt-4.1",
+                "api_base": "https://example.test/v1",
+                "api_key": "model-secret",
+            }
+        },
+    )
+
+    provider, model, provider_name = loop._resolve_request_llm(msg)
+
+    assert isinstance(provider, LiteLLMProvider)
+    assert model == "gpt-4.1"
+    assert provider_name == "openai"
+    assert provider.api_base == "https://example.test/v1"
+    assert provider.api_key == "model-secret"
