@@ -1673,6 +1673,10 @@ mod tests {
             verbose: false,
             upload: Default::default(),
             extra_headers: None,
+            provider: None,
+            model: None,
+            api_base: None,
+            model_api_key: None,
         };
 
         let ctx = CliContext::from_config(
@@ -1708,6 +1712,10 @@ mod tests {
             verbose: false,
             upload: Default::default(),
             extra_headers: None,
+            provider: None,
+            model: None,
+            api_base: None,
+            model_api_key: None,
         };
 
         // Without sudo: use api_key

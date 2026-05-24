@@ -187,33 +187,34 @@ impl ChatCommand {
     }
 
     fn build_runtime_llm(&self) -> Option<RuntimeLlmOverrides> {
+        let config = Config::load().unwrap_or_default();
         let model = self
             .model
-            .as_ref()
-            .map(|value| value.trim())
-            .filter(|value| !value.is_empty())?
-            .to_string();
+            .clone()
+            .or(config.model)
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())?;
 
         Some(RuntimeLlmOverrides {
             provider: self
                 .provider
-                .as_ref()
-                .map(|value| value.trim())
-                .filter(|value| !value.is_empty())
-                .map(|value| value.to_string()),
+                .clone()
+                .or(config.provider)
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty()),
             model,
             api_base: self
                 .api_base
-                .as_ref()
-                .map(|value| value.trim())
-                .filter(|value| !value.is_empty())
-                .map(|value| value.to_string()),
+                .clone()
+                .or(config.api_base)
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty()),
             api_key: self
                 .model_api_key
-                .as_ref()
-                .map(|value| value.trim())
-                .filter(|value| !value.is_empty())
-                .map(|value| value.to_string()),
+                .clone()
+                .or(config.model_api_key)
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty()),
         })
     }
 
@@ -853,5 +854,49 @@ mod tests {
             runtime_llm.get("api_key").and_then(|v| v.as_str()),
             Some("model-secret")
         );
+    }
+
+    #[test]
+    fn build_runtime_llm_falls_back_to_config_when_cli_not_set() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let config_path = dir.path().join("ovcli.conf");
+        let config_json = r#"{"model":"gpt-from-config","provider":"config-provider","api_base":"https://config.example/v1","model_api_key":"config-key"}"#;
+        std::fs::write(&config_path, config_json).expect("write config");
+        unsafe { std::env::set_var("OPENVIKING_CLI_CONFIG_FILE", &config_path) };
+
+        let cmd = base_command();
+        let runtime_llm = cmd
+            .build_runtime_llm()
+            .expect("should fall back to config");
+
+        assert_eq!(runtime_llm.model, "gpt-from-config");
+        assert_eq!(runtime_llm.provider.as_deref(), Some("config-provider"));
+        assert_eq!(runtime_llm.api_base.as_deref(), Some("https://config.example/v1"));
+        assert_eq!(runtime_llm.api_key.as_deref(), Some("config-key"));
+
+        unsafe { std::env::remove_var("OPENVIKING_CLI_CONFIG_FILE") };
+    }
+
+    #[test]
+    fn build_runtime_llm_cli_overrides_config() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let config_path = dir.path().join("ovcli.conf");
+        let config_json = r#"{"model":"config-model","provider":"config-provider","api_base":"https://config.example/v1","model_api_key":"config-key"}"#;
+        std::fs::write(&config_path, config_json).expect("write config");
+        unsafe { std::env::set_var("OPENVIKING_CLI_CONFIG_FILE", &config_path) };
+
+        let mut cmd = base_command();
+        cmd.model = Some("cli-model".to_string());
+        cmd.api_base = Some("https://cli.example/v1".to_string());
+
+        let runtime_llm = cmd
+            .build_runtime_llm()
+            .expect("CLI arg should take precedence");
+
+        assert_eq!(runtime_llm.model, "cli-model");
+        assert_eq!(runtime_llm.provider.as_deref(), Some("config-provider"));
+        assert_eq!(runtime_llm.api_base.as_deref(), Some("https://cli.example/v1"));
+
+        unsafe { std::env::remove_var("OPENVIKING_CLI_CONFIG_FILE") };
     }
 }

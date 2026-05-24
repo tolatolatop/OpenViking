@@ -33,6 +33,18 @@ pub struct Config {
     #[serde(alias = "user_id")]
     pub user: Option<String>,
     pub agent_id: Option<String>,
+    /// Default LLM provider for chat requests
+    #[serde(default)]
+    pub provider: Option<String>,
+    /// Default LLM model for chat requests
+    #[serde(default)]
+    pub model: Option<String>,
+    /// Default LLM API base URL for chat requests
+    #[serde(default)]
+    pub api_base: Option<String>,
+    /// Default LLM API key for chat requests
+    #[serde(default)]
+    pub model_api_key: Option<String>,
     #[serde(default = "default_timeout")]
     pub timeout: f64,
     #[serde(default = "default_output_format")]
@@ -82,6 +94,10 @@ impl Default for Config {
             account: None,
             user: None,
             agent_id: None,
+            provider: None,
+            model: None,
+            api_base: None,
+            model_api_key: None,
             timeout: 60.0,
             output: "table".to_string(),
             echo_command: true,
@@ -348,5 +364,24 @@ mod tests {
         let headers = config.extra_headers.expect("extra_headers should be present");
         assert_eq!(headers.get("X-Custom-Header"), Some(&"custom-value".to_string()));
         assert_eq!(headers.get("Authorization"), Some(&"Bearer token".to_string()));
+    }
+
+    #[test]
+    fn config_deserializes_llm_override_fields() {
+        let config: Config = serde_json::from_str(
+            r#"{
+                "url": "http://localhost:1933",
+                "provider": "openai",
+                "model": "gpt-4o",
+                "api_base": "https://api.openai.com/v1",
+                "model_api_key": "sk-xxx"
+            }"#,
+        )
+        .expect("config should deserialize LLM override fields");
+
+        assert_eq!(config.provider.as_deref(), Some("openai"));
+        assert_eq!(config.model.as_deref(), Some("gpt-4o"));
+        assert_eq!(config.api_base.as_deref(), Some("https://api.openai.com/v1"));
+        assert_eq!(config.model_api_key.as_deref(), Some("sk-xxx"));
     }
 }
